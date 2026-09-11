@@ -35,6 +35,7 @@ emoji-rss                 # menu: add / edit / remove, with config one level dow
 emoji-rss add <url>       # fetch the feed, name it, pick an emoji
 emoji-rss ls              # feeds in priority order, when each last posted
 emoji-rss check --force   # fetch now, rather than waiting out the ttl
+emoji-rss go              # open the new item in your browser
 emoji-rss now             # print the emoji the prompt is showing (no network)
 ```
 
@@ -53,6 +54,11 @@ updated and I don't want to wait", and for seeing which feeds are erroring.
 
 A searchable emoji picker is deliberately not built; `docs/emoji-picker.md` has
 the notes if free text ever gets annoying.
+
+`go` is the other half of the emoji: it says something happened, `go` opens it.
+It only appears in the menu when a feed is actually fresh -- with nothing new
+there is nothing to open. `go <feed>` opens a named feed's latest whatever its
+age, since you asked for it by name.
 
 `ls` colours each feed by what it is doing — green is showing in your prompt,
 grey is not — and shows when it last posted next to how often it posts, both

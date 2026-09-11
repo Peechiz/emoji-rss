@@ -29,6 +29,7 @@ import {
 import { recompute, runCheck } from "./check.ts";
 import { WINDOW_LABEL, ago, cadenceDays, describeCadence, fetchFeed, freshItem, shortCadence, type FeedDoc } from "./feed.ts";
 import { SOURCE_LINE, ZSHRC, ensureSnippet, otherShellSnippet, patchZshrc, zshrcSourcesSnippet } from "./install.ts";
+import { openUrl } from "./open.ts";
 import { c, pad, trunc } from "./theme.ts";
 
 const HELP = `emoji-rss - your prompt emoji, driven by RSS/Atom feeds
@@ -41,6 +42,7 @@ commands:
   ls               list feeds and what the last check found
   rm               remove a feed
   check            fetch every feed now, instead of waiting out the ttl
+  go [feed]        open the new item in your browser; named feed opens anyway
   now              print the emoji the prompt is currently showing
   install          write the zsh hook and wire it into ~/.zshrc
   help             this text
@@ -418,6 +420,74 @@ async function setFallback(cfg: Config): Promise<Config> {
   return next;
 }
 
+/* ------------------------------------------------------------------- go */
+
+/** A feed paired with whatever link `go` would open for it. */
+type Target = { feed: Feed; url: string; fresh: boolean };
+
+async function targets(cfg: Config): Promise<Target[]> {
+  const state = await loadState();
+  return cfg.feeds
+    .map((feed) => {
+      const s = state?.feeds.find((x) => x.url === feed.url);
+      const url = s?.item ?? s?.latestLink;
+      return url ? { feed, url, fresh: Boolean(s?.item) } : null;
+    })
+    .filter((t): t is Target => t !== null);
+}
+
+/**
+ * Open what the prompt is pointing at. The emoji says something happened; this
+ * is the thing to do about it, which otherwise means going and finding the tab
+ * yourself.
+ */
+async function go(cfg: Config, query?: string) {
+  const all = await targets(cfg);
+  if (all.length === 0) {
+    log.info(c.dim("nothing to open yet - run a check first"));
+    return;
+  }
+
+  if (query) {
+    const q = query.toLowerCase();
+    const hits = all.filter((t) => t.feed.name.toLowerCase().includes(q));
+    if (hits.length === 0) {
+      log.warn(c.yellow(`no feed matching "${query}"`));
+      return;
+    }
+    const t = hits[0]!;
+    log.success(`${t.feed.emoji} ${t.feed.name}`);
+    openUrl(t.url);
+    return;
+  }
+
+  // Only fresh items. Opening the latest from a quiet feed is just a bookmark,
+  // and the whole point of `go` is acting on what the prompt is telling you.
+  const fresh = all.filter((t) => t.fresh);
+  if (fresh.length === 0) {
+    log.info(c.dim("nothing new to open"));
+    return;
+  }
+  if (fresh.length === 1) {
+    const t = fresh[0]!;
+    log.success(`${t.feed.emoji} ${t.feed.name}`);
+    openUrl(t.url);
+    return;
+  }
+
+  const url = unwrap(
+    await select<string>({
+      message: "open which?",
+      options: fresh.map((t) => ({
+        value: t.url,
+        label: `${t.feed.emoji} ${t.feed.name}`,
+        hint: t.url.replace(/^https?:\/\//, ""),
+      })),
+    }),
+  );
+  openUrl(url);
+}
+
 /* ---------------------------------------------------------------- commands */
 
 async function setMaxEmoji(cfg: Config): Promise<Config> {
@@ -545,10 +615,20 @@ async function menu(cfg: Config) {
   let current = cfg;
   for (;;) {
     await listFeeds(current);
+    // `go` is only worth offering when there is something new to open.
+    const fresh = (await targets(current)).filter((t) => t.fresh);
+    const goOption =
+      fresh.length === 1
+        ? [{ value: "go", label: `open ${fresh[0]!.feed.emoji} ${fresh[0]!.feed.name}` }]
+        : fresh.length > 1
+          ? [{ value: "go", label: `open something new`, hint: fresh.map((t) => t.feed.emoji).join("") }]
+          : [];
+
     const action = unwrap(
       await select<string>({
         message: "what now?",
         options: [
+          ...goOption,
           { value: "add", label: "add a feed" },
           { value: "edit", label: "edit a feed", hint: "emoji, name, window, filter" },
           { value: "rm", label: "remove a feed" },
@@ -558,6 +638,9 @@ async function menu(cfg: Config) {
       }),
     );
     switch (action) {
+      case "go":
+        await go(current);
+        break;
       case "add":
         current = await addFeed(current);
         break;
@@ -646,6 +729,9 @@ async function main() {
       break;
     case "edit":
       await editFeed(config);
+      break;
+    case "go":
+      await go(config, args.slice(1).join(" ") || undefined);
       break;
     case "install":
       await doInstall(config);

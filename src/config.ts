@@ -38,6 +38,8 @@ export type FeedState = {
   item?: string;
   /** Date of the newest item, ignoring the window: "when did this last post". */
   latest?: string;
+  /** Link of that newest item, so `go` works on a feed that is not fresh. */
+  latestLink?: string;
   /**
    * Median days between posts, measured from the feed's own items. Feeds do
    * declare a frequency, but it is near-useless -- WordPress emits "hourly" for

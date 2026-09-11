@@ -46,6 +46,7 @@ async function checkFeed(feed: Feed, previous?: FeedState): Promise<FeedState> {
       hit: Boolean(item),
       item: item?.link,
       latest: latest?.date?.toISOString(),
+      latestLink: latest?.link,
       cadenceDays: cadenceDays(doc),
       checkedAt: now,
     };
@@ -57,6 +58,7 @@ async function checkFeed(feed: Feed, previous?: FeedState): Promise<FeedState> {
       hit: previous?.hit ?? false,
       item: previous?.item,
       latest: previous?.latest,
+      latestLink: previous?.latestLink,
       cadenceDays: previous?.cadenceDays,
       checkedAt: previous?.checkedAt ?? 0,
       error: err instanceof Error ? err.message : String(err),
