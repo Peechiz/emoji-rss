@@ -13,7 +13,6 @@ import {
 } from "@clack/prompts";
 import {
   CONFIG_FILE,
-  DEFAULT_CONFIG,
   EMOJI_FILE,
   SHELL_SNIPPET,
   cacheAgeSeconds,
@@ -27,7 +26,17 @@ import {
   type Window,
 } from "./config.ts";
 import { recompute, runCheck } from "./check.ts";
-import { WINDOW_LABEL, ago, cadenceDays, describeCadence, fetchFeed, freshItem, shortCadence, type FeedDoc } from "./feed.ts";
+import {
+  WINDOW_LABEL,
+  ago,
+  cadenceDays,
+  describeCadence,
+  fetchFeed,
+  freshItem,
+  linkFilterChoices,
+  shortCadence,
+  type FeedDoc,
+} from "./feed.ts";
 import { SOURCE_LINE, ZSHRC, ensureSnippet, otherShellSnippet, patchZshrc, zshrcSourcesSnippet } from "./install.ts";
 import { openUrl } from "./open.ts";
 import { c, pad, trunc } from "./theme.ts";
@@ -39,20 +48,22 @@ usage: emoji-rss [command]
 commands:
   (none)           interactive menu: add, edit, reorder, remove feeds
   add [url]        add a feed and pick its emoji
-  ls               list feeds and what the last check found
+  ls               list feeds and when each last posted
   rm               remove a feed
-  check            fetch every feed now, instead of waiting out the ttl
+  check            fetch every feed; what the shell hook runs in the background
   go [feed]        open the new item in your browser; named feed opens anyway
   now              print the emoji the prompt is currently showing
   install          write the zsh hook and wire it into ~/.zshrc
   help             this text
 
 flags:
-  --force          check: ignore the ttl and fetch anyway
-  --quiet          check: print nothing (how the shell hook calls it)
+  --quiet          check: print nothing, and honour the ttl (the shell hook)
+  --force          check --quiet: fetch anyway
   --refresh        now: refresh first instead of reading the cache
 
 how it works:
+  every interactive run above fetches all your feeds first, so what it shows
+  you is current. only the prompt reads a cache.
   feeds live in ${CONFIG_FILE}
   the winning emoji is written to ${EMOJI_FILE}
   your prompt reads that one file and never waits on the network; it spawns a
@@ -141,26 +152,61 @@ async function listFeeds(cfg: Config) {
 
 /* -------------------------------------------------------------- add a feed */
 
+const CUSTOM = "\0custom";
+
 /**
- * Path prefixes worth offering as a filter, e.g. /comic/ next to a feed's news
- * posts. Prefixes that appear once are the feed's own item slugs (xkcd gives
- * every comic its own), so they are noise; if what is left covers every item
- * there is nothing to filter and the question should not be asked at all.
+ * Which items count -- answered by picking, not by typing. Feeds split their
+ * content in ways no rule can predict (a path section here, a slug prefix
+ * there), so the feed's own groupings are the options, each with the number of
+ * items it keeps. Free text stays at the bottom for the feed that splits on
+ * something else entirely, and it will not accept a substring matching nothing.
  */
-function linkFilterChoices(doc: FeedDoc): { value: string; count: number }[] {
-  const counts = new Map<string, number>();
-  for (const item of doc.items) {
-    try {
-      const seg = new URL(item.link).pathname.split("/").filter(Boolean)[0];
-      if (seg) counts.set(`/${seg}/`, (counts.get(`/${seg}/`) ?? 0) + 1);
-    } catch {}
+async function pickLinkFilter(doc: FeedDoc, current?: string): Promise<string | undefined> {
+  const total = doc.items.length;
+  const matching = (needle: string) => doc.items.filter((i) => i.link.includes(needle)).length;
+  const choices = linkFilterChoices(doc);
+  const listed = choices.some((ch) => ch.value === current);
+
+  const picked = unwrap(
+    await select<string>({
+      message: "which items count?",
+      options: [
+        { value: "", label: "all of them", hint: `${total} items` },
+        ...choices.map((ch) => ({
+          value: ch.value,
+          label: `links ${ch.label}`,
+          hint: `${ch.count} of ${total}`,
+        })),
+        // A filter set by hand, or by an older version of this list, stays on
+        // the menu rather than quietly becoming "all of them".
+        ...(current && !listed
+          ? [{ value: current, label: `links containing "${current}"`, hint: `${matching(current)} of ${total} - set now` }]
+          : []),
+        { value: CUSTOM, label: "something else in the link…" },
+      ],
+      initialValue: current ?? "",
+    }),
+  );
+  if (picked !== CUSTOM) {
+    if (picked) log.info(c.dim(`${matching(picked)} of ${total} items count`));
+    return picked || undefined;
   }
-  const groups = [...counts.entries()]
-    .filter(([, count]) => count > 1)
-    .map(([value, count]) => ({ value, count }))
-    .sort((a, b) => b.count - a.count);
-  const covered = groups.reduce((n, g) => n + g.count, 0);
-  return covered === doc.items.length ? [] : groups;
+
+  note(doc.items.slice(0, 3).map((i) => i.link).join("\n"), "this feed's links");
+  const typed = unwrap(
+    await text({
+      message: "link must contain",
+      placeholder: "leave empty for all of them",
+      initialValue: current ?? "",
+      validate: (v) => {
+        const needle = (v ?? "").trim();
+        if (!needle) return undefined;
+        return matching(needle) === 0 ? "no item in this feed has that in its link" : undefined;
+      },
+    }),
+  ).trim();
+  if (typed) log.info(c.dim(`${matching(typed)} of ${total} items count`));
+  return typed || undefined;
 }
 
 async function addFeed(cfg: Config, preset?: string): Promise<Config> {
@@ -222,30 +268,8 @@ async function addFeed(cfg: Config, preset?: string): Promise<Config> {
     }),
   );
 
-  // A filter matters for feeds that mix content (comic pages vs news posts).
-  let linkContains: string | undefined;
-  const choices = linkFilterChoices(doc);
-  if (choices.length > 0) {
-    const picked = unwrap(
-      await select<string>({
-        message: "which items count?",
-        options: [
-          { value: "", label: "all of them" },
-          ...choices.map((ch) => ({
-            value: ch.value,
-            label: `links under ${ch.value}`,
-            hint: `${ch.count} of ${doc.items.length}`,
-          })),
-          { value: "\0custom", label: "something else in the link…" },
-        ],
-        initialValue: "",
-      }),
-    );
-    linkContains =
-      picked === "\0custom"
-        ? unwrap(await text({ message: "link must contain", placeholder: "/comic/" })).trim()
-        : picked || undefined;
-  }
+  const linkContains = await pickLinkFilter(doc);
+
 
   const feed: Feed = { name, url: url.trim(), emoji, linkContains, window, enabled: true };
 
@@ -338,10 +362,27 @@ async function editFeed(cfg: Config): Promise<Config> {
       };
       break;
     case "filter": {
-      const v = unwrap(
-        await text({ message: "link must contain (empty for no filter)", initialValue: f.linkContains ?? "" }),
-      ).trim();
-      feeds[i] = { ...f, linkContains: v || undefined };
+      // Fetching costs a second and buys the same list of real choices `add`
+      // offers; typing a substring blind is how you end up with an emoji that
+      // never shows.
+      const s = spinner();
+      s.start(`fetching ${f.url}`);
+      let doc: FeedDoc | null = null;
+      try {
+        doc = await fetchFeed(f.url);
+      } catch (err) {
+        s.stop(c.yellow(`could not read the feed: ${err instanceof Error ? err.message : String(err)}`));
+      }
+      if (doc && doc.items.length > 0) {
+        s.stop(`${doc.items.length} items`);
+        feeds[i] = { ...f, linkContains: await pickLinkFilter(doc, f.linkContains) };
+      } else {
+        if (doc) s.stop(c.yellow("no items in that feed"));
+        const v = unwrap(
+          await text({ message: "link must contain (empty for no filter)", initialValue: f.linkContains ?? "" }),
+        ).trim();
+        feeds[i] = { ...f, linkContains: v || undefined };
+      }
       break;
     }
     case "toggle":
@@ -685,14 +726,12 @@ async function main() {
   if (cmd === "check") {
     const quiet = flags.has("--quiet");
     // The shell hook may be the very first thing to run: seed the config so the
-    // defaults are editable instead of invisible.
+    // knobs are editable instead of invisible.
     if (!(await configExists())) await saveConfig(cfg);
-    if (!flags.has("--force")) {
+    // The ttl is the shell hook's back-off, not a rule for a command you typed.
+    if (quiet && !flags.has("--force")) {
       const age = await cacheAgeSeconds();
-      if (age < cfg.ttlSeconds) {
-        if (!quiet) log.info(c.dim(`cache is ${Math.round(age / 60)}m old - use --force to fetch anyway`));
-        return;
-      }
+      if (age < cfg.ttlSeconds) return;
     }
     if (!quiet) intro(c.title(" emoji-rss "));
     await checkNow(cfg, quiet);
@@ -703,14 +742,18 @@ async function main() {
 
   let config = cfg;
 
-  // First run: the defaults are seeded but nothing is on disk yet.
+  // First run: nothing on disk yet. Seed the file so the knobs are editable
+  // rather than invisible, and wire the shell up before there is a feed to see,
+  // so the first one added shows up without a second trip through here.
   if (!(await configExists())) {
     await saveConfig(config);
-    log.info(
-      `started you off with ${DEFAULT_CONFIG.feeds.map((f) => `${f.emoji} ${f.name}`).join(", ")} and a ${config.fallback} fallback`,
-    );
+    log.info(c.dim(`no feeds yet - add one and it drives your prompt; until then it shows ${config.fallback}`));
     config = await ensureWired(config);
   }
+
+  // Every interactive run fetches. The ttl exists so the *prompt* never waits
+  // on the network; a run you typed yourself is a run that wants the answer now.
+  if (config.feeds.some((f) => f.enabled)) await checkNow(config, false);
 
   switch (cmd) {
     case "":

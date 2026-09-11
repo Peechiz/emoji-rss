@@ -180,3 +180,81 @@ export function ago(iso: string | undefined): string {
   if (days < 60) return `${days}d ago`;
   return `${Math.round(days / 30)}mo ago`;
 }
+
+/**
+ * Words that start a title rather than name a grouping. Without these, "The
+ * Queen of Swords" and "The Endeavor" pile up into a `starting with "the"`
+ * choice that means nothing.
+ */
+const TITLE_FILLER = new Set([
+  "the", "and", "for", "from", "with", "this", "that", "these", "those", "its", "our", "your",
+  "their", "his", "her", "you", "they", "what", "when", "where", "who", "why", "how", "all",
+  "not", "now", "new", "just", "will", "would", "can", "does", "did", "let", "into", "out",
+  "about", "over", "under", "off", "one", "two", "three", "part", "here", "there", "after",
+  "before", "every", "some", "any", "more", "most", "than", "then", "but", "nothing",
+]);
+
+/** A ready-made `linkContains` value, with the count it would keep. */
+export type LinkFilter = { value: string; count: number; label: string };
+
+/**
+ * Ways to narrow this feed, offered as choices so nobody has to guess at a
+ * substring. Two shapes cover nearly every feed:
+ *
+ * - the section in the path -- KSBD puts its comics under `/comic/` and its
+ *   "next update Thursday" posts at the root.
+ * - the first word of the item's own slug, for feeds that file everything under
+ *   one path. Worlds Beyond Number's 96 items all live under `/episodes/`, and
+ *   the only thing separating a story episode from a fireside chat is that the
+ *   slug starts with `fireside-`.
+ *
+ * Every value is a plain substring of the link, matched the way `linkContains`
+ * matches at runtime, so the counts shown are the counts you get. A candidate
+ * that keeps one item is a slug rather than a grouping, and one that keeps them
+ * all filters nothing; both are dropped.
+ */
+export function linkFilterChoices(doc: FeedDoc, limit = 6): LinkFilter[] {
+  const links = doc.items.map((i) => i.link).filter(Boolean);
+  if (links.length < 2) return [];
+
+  const labels = new Map<string, string>();
+  for (const link of links) {
+    let segments: string[];
+    try {
+      segments = new URL(link).pathname.split("/").filter(Boolean);
+    } catch {
+      continue;
+    }
+    for (const section of segments.slice(0, -1)) {
+      if (section.length >= 2) labels.set(`/${section}/`, `under /${section}/`);
+    }
+    const word = (segments.at(-1) ?? "").split("-")[0] ?? "";
+    if (word.length >= 3 && !/^\d+$/.test(word) && !TITLE_FILLER.has(word)) {
+      labels.set(`/${word}-`, `starting with "${word}"`);
+    }
+  }
+
+  const scored = [...labels]
+    .map(([value, label]) => ({
+      value,
+      label,
+      hits: links.reduce<number[]>((acc, l, i) => (l.includes(value) ? [...acc, i] : acc), []),
+    }))
+    .filter((c) => c.hits.length > 1 && c.hits.length < links.length);
+
+  // A section and a slug word often select the same items (KSBD's `/comic/` and
+  // `/wheel-`); keep one, and let the section win because it survives the day
+  // the comic stops being about a wheel.
+  const best = new Map<string, (typeof scored)[number]>();
+  for (const c of scored) {
+    const key = c.hits.join(",");
+    const held = best.get(key);
+    const section = (v: string) => v.endsWith("/");
+    if (!held || (section(c.value) && !section(held.value))) best.set(key, c);
+  }
+
+  return [...best.values()]
+    .sort((a, b) => b.hits.length - a.hits.length || a.value.localeCompare(b.value))
+    .slice(0, limit)
+    .map((c) => ({ value: c.value, count: c.hits.length, label: c.label }));
+}

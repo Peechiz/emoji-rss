@@ -1,8 +1,8 @@
 # emoji-rss
 
-The emoji at the front of your prompt, driven by RSS/Atom feeds. Kill Six Billion
-Demons posted today → 😈. That and a rocket launch → 😈🚀. Neither → 🔥. Add your
-own feed/emoji pairs with a CLI.
+The emoji at the front of your prompt, driven by RSS/Atom feeds. Your comic
+posted today → 😈. That and a rocket launch → 😈🚀. Neither → 🔥. You pick the
+feeds and the emoji; it starts empty.
 
 Works in the zsh prompt and in the Claude Code statusline at the same time, off
 one shared cache file.
@@ -15,15 +15,20 @@ one shared cache file.
 
 ```sh
 bun install
-bun run build          # produces ./emoji-rss
-ln -s "$PWD/emoji-rss" ~/.local/bin/emoji-rss
+bun link               # puts emoji-rss on your PATH (~/.bun/bin)
 emoji-rss add <url>    # it offers to wire up your shell on the way
 ```
+
+`bun link` registers this directory and symlinks the `emoji-rss` bin, so edits
+to `src/` are live and there is nothing to rebuild. `bun unlink` undoes it. For
+a standalone binary with nothing pointing back here, `bun run build` produces
+`./emoji-rss` and you can symlink that onto your PATH instead.
 
 There is no separate setup step. Any interactive run refreshes the zsh hook at
 `~/.config/emoji-rss/emoji-rss.zsh`, and if your prompt is not reading it yet,
 adding a feed offers to append the one `source` line to `~/.zshrc`. Say no and
-it stops asking.
+it stops asking. Nothing is configured for you: until you add a feed the prompt
+shows the fallback 🔥.
 
 `emoji-rss install` does the same wiring on demand, and prints a plain sh
 snippet for any prompt it will not edit (a bash statusline, tmux, whatever).
@@ -34,23 +39,42 @@ snippet for any prompt it will not edit (a bash statusline, tmux, whatever).
 emoji-rss                 # menu: add / edit / remove, with config one level down
 emoji-rss add <url>       # fetch the feed, name it, pick an emoji
 emoji-rss ls              # feeds in priority order, when each last posted
-emoji-rss check --force   # fetch now, rather than waiting out the ttl
+emoji-rss check           # fetch every feed, print what each one did
 emoji-rss go              # open the new item in your browser
 emoji-rss now             # print the emoji the prompt is showing (no network)
 ```
 
 Adding a feed fetches it first and uses what it finds, so it only asks you
 things the feed can't answer. It takes the name from the feed's own title,
-reports how often it posts, preselects a freshness window that matches that
-cadence, and skips the link-filter question entirely unless the feed actually
-mixes content. In practice adding a feed is a url and an emoji. `edit → rename`
-is there for the rare feed whose own title is useless.
+reports how often it posts, and preselects a freshness window that matches that
+cadence. `edit → rename` is there for the rare feed whose own title is useless.
 
-You rarely need `check`. The prompt refreshes itself in the background every 30
-minutes, and any change you make in the CLI — a new feed, a different emoji, a
-reorder, a removal — rewrites the cache immediately without a network request,
-because whether each feed is fresh is already known. `check` is for "it just
-updated and I don't want to wait", and for seeing which feeds are erroring.
+It always asks which items count, and it asks with a list, because nobody
+should have to guess at a substring. The choices are read out of the feed's own
+links, each with the number of items it keeps:
+
+```
+which items count?
+● all of them                       96 items
+○ links starting with "solari"      11 of 96
+○ links starting with "fireside"     4 of 96
+○ something else in the link…
+```
+
+Two shapes cover nearly every feed. Some name the section in the path, so KSBD
+offers `links under /comic/` (7 of 10) and leaves out its "next update Thursday"
+posts. Some file everything under one path — all 96 Worlds Beyond Number items
+live under `/episodes/` — and the only thing separating a story episode from a
+fireside chat is the start of the slug, so that is what it offers instead.
+"All of them" is the default, so a feed that doesn't need narrowing is one
+Enter. Free text is still there at the bottom, and it won't take a substring
+that matches nothing. `edit → change the link filter` shows the same list,
+with whatever the feed uses now already selected.
+
+Every interactive run fetches all your feeds before it shows you anything, so
+`ls` and the menu are never reporting yesterday. `check` is that fetch on its
+own, and it is what the shell hook runs in the background; typed by hand it
+always fetches, and `--quiet` is the mode that honours the ttl instead.
 
 A searchable emoji picker is deliberately not built; `docs/emoji-picker.md` has
 the notes if free text ever gets annoying.
@@ -76,7 +100,9 @@ feeds declare nothing at all.
 The prompt never touches the network and never forks.
 
 - `emoji-rss check` fetches every feed, picks the winners, and writes them to
-  `~/.cache/emoji-rss/emoji` — that file holds one emoji and nothing else.
+  `~/.cache/emoji-rss/emoji` — that file holds one emoji and nothing else. Its
+  mtime is the time of the last *network* check, not of the last write, so
+  editing an emoji can't buy the prompt a quiet half hour.
 - The zsh hook reads that file with `$(<file)`, a zsh builtin, and gets the
   mtime with `zstat` from `zsh/stat`. No subprocesses in `precmd`.
 - Only when the cache is older than the TTL (30 min) does it spawn a detached
@@ -118,8 +144,10 @@ The prompt never touches the network and never forks.
   as the feed's own posting cadence leaves the emoji permanently on, which says
   nothing, so `add` suggests `today` for anything weekly or faster and `7d` for
   rarer feeds.
-- **`linkContains`** filters by item link. KSBD's feed carries both comic pages
-  and "next update Thursday" news posts; `/comic/` counts only the comics.
+- **`linkContains`** filters by item link, and both `add` and `edit` offer it as
+  a list of the feed's own groupings. It is a plain substring, not a path:
+  `/comic/` counts only KSBD's comics, and `/solari-` counts one podcast series
+  out of the 96 episodes sharing its `/episodes/` path.
 
 ## Shell knobs
 

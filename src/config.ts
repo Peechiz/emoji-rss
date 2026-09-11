@@ -1,7 +1,7 @@
 /** Config + cache locations, schema, and atomic read/write. */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, renameSync } from "node:fs";
+import { mkdirSync, renameSync, utimesSync } from "node:fs";
 
 export type Window = "today" | "24h" | "7d";
 
@@ -71,22 +71,13 @@ export const SHELL_SNIPPET = join(CONFIG_DIR, "emoji-rss.zsh");
 
 export const DEFAULT_FALLBACK = "🔥";
 
-/** First run seeds the setup this replaces, so the prompt looks the same. */
+/** First run seeds this, so the knobs are editable rather than invisible. */
 export const DEFAULT_CONFIG: Config = {
   version: 1,
   fallback: DEFAULT_FALLBACK,
   ttlSeconds: 1800,
   maxEmoji: 3,
-  feeds: [
-    {
-      name: "Kill Six Billion Demons",
-      url: "https://killsixbilliondemons.com/feed/",
-      emoji: "😈",
-      linkContains: "/comic/",
-      window: "today",
-      enabled: true,
-    },
-  ],
+  feeds: [],
 };
 
 export async function loadConfig(): Promise<Config> {
@@ -143,6 +134,13 @@ export async function saveState(state: State): Promise<void> {
   mkdirSync(CACHE_DIR, { recursive: true });
   await writeAtomic(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`);
   await writeAtomic(EMOJI_FILE, state.emoji);
+  // The prompt decides "is this stale" from this file's mtime, so the mtime has
+  // to mean "when did we last hit the network" and not "when was this written".
+  // Otherwise a recompute -- changing an emoji, adding a feed -- would buy a
+  // whole ttl of the prompt not checking anything.
+  try {
+    utimesSync(EMOJI_FILE, new Date(), new Date(state.checkedAt || 0));
+  } catch {}
 }
 
 /** Emoji the prompts are currently showing, without touching the network. */
