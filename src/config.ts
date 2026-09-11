@@ -36,6 +36,14 @@ export type FeedState = {
   hit: boolean;
   /** Link of the item that matched, for `ls` output. */
   item?: string;
+  /** Date of the newest item, ignoring the window: "when did this last post". */
+  latest?: string;
+  /**
+   * Median days between posts, measured from the feed's own items. Feeds do
+   * declare a frequency, but it is near-useless -- WordPress emits "hourly" for
+   * a weekly comic, and plenty of feeds declare nothing at all.
+   */
+  cadenceDays?: number | null;
   checkedAt: number;
   error?: string;
 };

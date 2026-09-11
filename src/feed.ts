@@ -105,6 +105,18 @@ export const WINDOW_LABEL: Record<Window, string> = {
   "7d": "posted in the last 7 days",
 };
 
+/** The newest item matching the link filter, whatever its age. */
+export function latestItem(doc: FeedDoc, feed: Feed): Item | null {
+  const match = feed.linkContains?.trim();
+  let best: Item | null = null;
+  for (const item of doc.items) {
+    if (match && !item.link.includes(match)) continue;
+    if (!item.date) continue;
+    if (!best || item.date > best.date!) best = item;
+  }
+  return best;
+}
+
 /** The newest item matching the feed's link filter and freshness window. */
 export function freshItem(doc: FeedDoc, feed: Feed, now = new Date()): Item | null {
   const since = windowStart(feed.window, now);
@@ -143,4 +155,28 @@ export function describeCadence(days: number | null): string {
   if (days < 10) return "posts about weekly";
   if (days < 20) return "posts about every two weeks";
   return "posts about monthly";
+}
+
+/** The same thing, short enough for a column: "~weekly". */
+export function shortCadence(days: number | null): string {
+  if (days === null) return "";
+  if (days < 1.5) return "~daily";
+  if (days < 3) return "~every 2d";
+  if (days < 10) return "~weekly";
+  if (days < 20) return "~biweekly";
+  return "~monthly";
+}
+
+/** Compact age for a column: "3h ago", "12d ago". */
+export function ago(iso: string | undefined): string {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 60) return `${days}d ago`;
+  return `${Math.round(days / 30)}mo ago`;
 }

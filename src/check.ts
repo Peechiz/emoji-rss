@@ -16,7 +16,7 @@ import {
   type FeedState,
   type State,
 } from "./config.ts";
-import { fetchFeed, freshItem } from "./feed.ts";
+import { cadenceDays, fetchFeed, freshItem, latestItem } from "./feed.ts";
 
 /** Single-flight: mkdir is atomic, so the loser just bails. */
 function acquireLock(): boolean {
@@ -40,7 +40,15 @@ async function checkFeed(feed: Feed, previous?: FeedState): Promise<FeedState> {
   try {
     const doc = await fetchFeed(feed.url);
     const item = freshItem(doc, feed);
-    return { url: feed.url, hit: Boolean(item), item: item?.link, checkedAt: now };
+    const latest = latestItem(doc, feed);
+    return {
+      url: feed.url,
+      hit: Boolean(item),
+      item: item?.link,
+      latest: latest?.date?.toISOString(),
+      cadenceDays: cadenceDays(doc),
+      checkedAt: now,
+    };
   } catch (err) {
     // A failed fetch keeps the last known answer. Caching it as "no update"
     // would blink the emoji off every time the network hiccups.
@@ -48,6 +56,8 @@ async function checkFeed(feed: Feed, previous?: FeedState): Promise<FeedState> {
       url: feed.url,
       hit: previous?.hit ?? false,
       item: previous?.item,
+      latest: previous?.latest,
+      cadenceDays: previous?.cadenceDays,
       checkedAt: previous?.checkedAt ?? 0,
       error: err instanceof Error ? err.message : String(err),
     };

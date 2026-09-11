@@ -27,9 +27,9 @@ import {
   type Window,
 } from "./config.ts";
 import { recompute, runCheck } from "./check.ts";
-import { WINDOW_LABEL, cadenceDays, describeCadence, fetchFeed, freshItem, type FeedDoc } from "./feed.ts";
+import { WINDOW_LABEL, ago, cadenceDays, describeCadence, fetchFeed, freshItem, shortCadence, type FeedDoc } from "./feed.ts";
 import { SOURCE_LINE, ZSHRC, ensureSnippet, otherShellSnippet, patchZshrc, zshrcSourcesSnippet } from "./install.ts";
-import { c, pad } from "./theme.ts";
+import { c, pad, trunc } from "./theme.ts";
 
 const HELP = `emoji-rss - your prompt emoji, driven by RSS/Atom feeds
 
@@ -93,19 +93,26 @@ const validEmoji = (v: string | undefined) => {
 function feedLine(f: Feed, i: number, state: Awaited<ReturnType<typeof loadState>>, width: number) {
   const s = state?.feeds.find((x) => x.url === f.url);
   const showing = state?.winners.includes(f.name);
-  const status = !f.enabled
-    ? c.dim("off")
+
+  // The name itself carries the common answer: green is showing, grey is not.
+  // Only the states you cannot guess from a colour keep a word next to them.
+  const name = trunc(f.name, width - 2);
+  const [painted, note] = !f.enabled
+    ? [c.dim(name), c.dim("off")]
     : s?.error
-      ? c.yellow(`! ${s.error}`)
+      ? [c.red(name), c.red("error")]
       : showing
-        ? c.green("showing")
+        ? [c.green(name), ""]
         : s?.hit
-          ? c.yellow("fresh, over the cap")
-          : s
-            ? c.dim("quiet")
-            : c.dim("unchecked");
-  const filter = f.linkContains ? c.dim(` link~${f.linkContains}`) : "";
-  return `${c.dim(String(i + 1).padStart(2))} ${f.emoji} ${pad(f.name, width)}${status}  ${c.dim(WINDOW_LABEL[f.window])}${filter}`;
+          ? [c.yellow(name), c.yellow("over the cap")]
+          : [c.dim(name), ""];
+
+  // What the feed is actually doing. The freshness window used to sit here as
+  // "posted in the last 24h", which read as a report next to "quiet" and said
+  // the opposite thing; it is config, and `edit` is where config belongs.
+  const facts = [ago(s?.latest), shortCadence(s?.cadenceDays ?? null)].filter(Boolean).join(" · ");
+
+  return `${c.dim(String(i + 1).padStart(2))} ${f.emoji} ${pad(painted, width)}${c.dim(facts || "not checked yet")}${note ? `  ${note}` : ""}`;
 }
 
 async function listFeeds(cfg: Config) {
@@ -114,13 +121,17 @@ async function listFeeds(cfg: Config) {
     log.info(c.dim("no feeds yet - run `emoji-rss add`"));
     return;
   }
-  const width = Math.min(34, Math.max(...cfg.feeds.map((f) => f.name.length)) + 2);
+  const width = Math.min(26, Math.max(...cfg.feeds.map((f) => f.name.length)) + 2);
   const showing = await cachedEmoji(cfg.fallback);
   const age = await cacheAgeSeconds();
   note(
     cfg.feeds.map((f, i) => feedLine(f, i, state, width)).join("\n"),
     `feeds ${c.dim("(order is priority)")}`,
   );
+  const errored = cfg.feeds.filter((f) => state?.feeds.find((x) => x.url === f.url)?.error);
+  for (const f of errored) {
+    log.warn(c.yellow(`${f.name}: ${state?.feeds.find((x) => x.url === f.url)?.error}`));
+  }
   const when = Number.isFinite(age) ? `checked ${Math.round(age / 60)}m ago` : "never checked";
   const who = state?.winners.length ? state.winners.join(" + ") : "fallback";
   log.info(`showing ${showing}  ${c.dim(`${who} - ${when}`)}`);

@@ -1,7 +1,9 @@
 /** Colors via Bun.Color, so the palette lives as hex in one place. */
 
 const RESET = "\x1b[0m";
-const useColor = () => Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+// FORCE_COLOR keeps `emoji-rss ls | less -R` readable; NO_COLOR always wins.
+const useColor = () =>
+  !process.env.NO_COLOR && (Boolean(process.stdout.isTTY) || Boolean(process.env.FORCE_COLOR));
 
 const palette = {
   hit: "#22c55e",
@@ -39,4 +41,10 @@ export const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 /** Pad to a visible column width; Bun.stringWidth counts emoji as two columns. */
 export function pad(s: string, width: number, min = 2): string {
   return s + " ".repeat(Math.max(min, width - Bun.stringWidth(s)));
+}
+
+/** Cut to a visible width, marking the cut so a truncated name is obvious. */
+export function trunc(s: string, width: number): string {
+  if (Bun.stringWidth(s) <= width) return s;
+  return `${s.slice(0, Math.max(1, width - 1))}…`;
 }

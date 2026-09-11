@@ -33,7 +33,7 @@ snippet for any prompt it will not edit (a bash statusline, tmux, whatever).
 ```sh
 emoji-rss                 # menu: add / edit / reorder / remove / check
 emoji-rss add <url>       # fetch the feed, name it, pick an emoji
-emoji-rss ls              # feeds, priority order, what the last check found
+emoji-rss ls              # feeds in priority order, when each last posted
 emoji-rss check --force   # fetch now, rather than waiting out the ttl
 emoji-rss now             # print the emoji the prompt is showing (no network)
 ```
@@ -53,6 +53,17 @@ updated and I don't want to wait", and for seeing which feeds are erroring.
 
 A searchable emoji picker is deliberately not built; `docs/emoji-picker.md` has
 the notes if free text ever gets annoying.
+
+`ls` colours each feed by what it is doing — green is showing in your prompt,
+grey is not — and shows when it last posted next to how often it posts, both
+measured from the feed's own items. Feeds do declare an update frequency, but it
+is not worth reading: WordPress emits "hourly" for a weekly comic, and plenty of
+feeds declare nothing at all.
+
+```
+ 1 😈 Kill Six Billion Demons  3h ago · ~weekly
+ 2 🐉 Worlds Beyond Number     11d ago · ~biweekly
+```
 
 ## How it doesn't slow down your prompt
 
@@ -95,7 +106,7 @@ The prompt never touches the network and never forks.
   today gives you `😈🚀🍊`.
 - **`maxEmoji`** caps that at 3 so a busy day can't run away with your prompt.
   When more feeds are fresh than fit, order decides who gets cut — `edit → give
-  it top priority` reorders, and `ls` marks the rest "fresh, over the cap".
+  it top priority` reorders, and `ls` marks the rest "over the cap".
 - **`window`** is `today` (local calendar day), `24h`, or `7d`. A window as long
   as the feed's own posting cadence leaves the emoji permanently on, which says
   nothing, so `add` suggests `today` for anything weekly or faster and `7d` for
