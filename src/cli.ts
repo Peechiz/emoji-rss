@@ -1,0 +1,490 @@
+#!/usr/bin/env bun
+import {
+  cancel,
+  confirm,
+  intro,
+  isCancel,
+  log,
+  note,
+  outro,
+  select,
+  spinner,
+  text,
+} from "@clack/prompts";
+import {
+  CONFIG_FILE,
+  DEFAULT_CONFIG,
+  EMOJI_FILE,
+  SHELL_SNIPPET,
+  cacheAgeSeconds,
+  cachedEmoji,
+  configExists,
+  loadConfig,
+  loadState,
+  saveConfig,
+  type Config,
+  type Feed,
+  type Window,
+} from "./config.ts";
+import { runCheck } from "./check.ts";
+import { WINDOW_LABEL, fetchFeed, freshItem, type FeedDoc } from "./feed.ts";
+import { ZSHRC, otherShellSnippet, patchZshrc, writeSnippet, zshrcSourcesSnippet } from "./install.ts";
+import { c, pad } from "./theme.ts";
+
+const HELP = `emoji-rss - your prompt emoji, driven by RSS/Atom feeds
+
+usage: emoji-rss [command]
+
+commands:
+  (none)           interactive menu: add, edit, reorder, remove feeds
+  add [url]        add a feed and pick its emoji
+  ls               list feeds and what the last check found
+  rm               remove a feed
+  check            fetch every feed now and rewrite the cache
+  now              print the emoji the prompt is currently showing
+  install          write the zsh hook and wire it into ~/.zshrc
+  help             this text
+
+flags:
+  --force          check: ignore the ttl and fetch anyway
+  --quiet          check: print nothing (how the shell hook calls it)
+  --refresh        now: refresh first instead of reading the cache
+
+how it works:
+  feeds live in ${CONFIG_FILE}
+  the winning emoji is written to ${EMOJI_FILE}
+  your prompt reads that one file and never waits on the network; it spawns a
+  detached \`emoji-rss check\` only when the cache goes stale.
+  feed order is priority - the first enabled feed with a fresh item wins.
+`;
+
+const WINDOWS: Window[] = ["today", "24h", "7d"];
+
+function bail(message: string): never {
+  cancel(message);
+  process.exit(1);
+}
+
+function unwrap<T>(v: T | symbol): T {
+  if (isCancel(v)) bail("cancelled - nothing changed.");
+  return v as T;
+}
+
+const validEmoji = (v: string | undefined) => {
+  const s = (v ?? "").trim();
+  if (!s) return "give it an emoji";
+  if (/\s/.test(s)) return "no spaces";
+  if (Bun.stringWidth(s) > 2) return "too wide for a prompt - one emoji, please";
+  return undefined;
+};
+
+/* ---------------------------------------------------------------- listing */
+
+function feedLine(f: Feed, i: number, state: Awaited<ReturnType<typeof loadState>>, width: number) {
+  const s = state?.feeds.find((x) => x.url === f.url);
+  const status = !f.enabled
+    ? c.dim("off")
+    : s?.error
+      ? c.yellow(`! ${s.error}`)
+      : s?.hit
+        ? c.green("fresh")
+        : s
+          ? c.dim("quiet")
+          : c.dim("unchecked");
+  const filter = f.linkContains ? c.dim(` link~${f.linkContains}`) : "";
+  return `${c.dim(String(i + 1).padStart(2))} ${f.emoji} ${pad(f.name, width)}${status}  ${c.dim(WINDOW_LABEL[f.window])}${filter}`;
+}
+
+async function listFeeds(cfg: Config) {
+  const state = await loadState();
+  if (cfg.feeds.length === 0) {
+    log.info(c.dim("no feeds yet - run `emoji-rss add`"));
+    return;
+  }
+  const width = Math.min(34, Math.max(...cfg.feeds.map((f) => f.name.length)) + 2);
+  const showing = await cachedEmoji(cfg.fallback);
+  const age = await cacheAgeSeconds();
+  note(
+    cfg.feeds.map((f, i) => feedLine(f, i, state, width)).join("\n"),
+    `feeds ${c.dim("(order is priority)")}`,
+  );
+  const when = Number.isFinite(age) ? `checked ${Math.round(age / 60)}m ago` : "never checked";
+  log.info(
+    `showing ${showing}  ${c.dim(state?.winner ? `${state.winner} - ${when}` : `fallback - ${when}`)}`,
+  );
+}
+
+/* -------------------------------------------------------------- add a feed */
+
+/** Offer the path prefixes actually present in the feed, e.g. /comic/ vs /blog/. */
+function linkFilterChoices(doc: FeedDoc): { value: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const item of doc.items) {
+    try {
+      const seg = new URL(item.link).pathname.split("/").filter(Boolean)[0];
+      if (seg) counts.set(`/${seg}/`, (counts.get(`/${seg}/`) ?? 0) + 1);
+    } catch {}
+  }
+  return [...counts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+async function addFeed(cfg: Config, preset?: string): Promise<Config> {
+  const url = preset ?? unwrap(
+    await text({
+      message: "feed url",
+      placeholder: "https://example.com/feed/",
+      validate: (v) => (/^https?:\/\//.test((v ?? "").trim()) ? undefined : "needs to start with http"),
+    }),
+  );
+
+  const s = spinner();
+  s.start(`fetching ${url}`);
+  let doc: FeedDoc;
+  try {
+    doc = await fetchFeed(url.trim());
+  } catch (err) {
+    s.stop(c.red(`could not read that feed: ${err instanceof Error ? err.message : String(err)}`));
+    return cfg;
+  }
+  if (doc.items.length === 0) {
+    s.stop(c.red("no items in that feed - is it really RSS or Atom?"));
+    return cfg;
+  }
+  const newest = doc.items.find((i) => i.date)?.date;
+  s.stop(
+    `${doc.title || url} ${c.dim(`- ${doc.items.length} items${newest ? `, newest ${newest.toLocaleDateString()}` : ""}`)}`,
+  );
+
+  const name = unwrap(
+    await text({ message: "name it", initialValue: doc.title || url, validate: (v) => (v?.trim() ? undefined : "needs a name") }),
+  ).trim();
+
+  const emoji = unwrap(
+    await text({ message: "emoji to show when it updates", placeholder: "😈", validate: validEmoji }),
+  ).trim();
+
+  const window = unwrap(
+    await select<Window>({
+      message: "how fresh does an item have to be?",
+      options: WINDOWS.map((w) => ({ value: w, label: WINDOW_LABEL[w] })),
+      initialValue: "today" as Window,
+    }),
+  );
+
+  // A filter matters for feeds that mix content (comic pages vs news posts).
+  let linkContains: string | undefined;
+  const choices = linkFilterChoices(doc);
+  if (choices.length > 1) {
+    const picked = unwrap(
+      await select<string>({
+        message: "which items count?",
+        options: [
+          { value: "", label: "all of them" },
+          ...choices.map((ch) => ({
+            value: ch.value,
+            label: `links under ${ch.value}`,
+            hint: `${ch.count} of ${doc.items.length}`,
+          })),
+          { value: "\0custom", label: "something else in the link…" },
+        ],
+        initialValue: "",
+      }),
+    );
+    linkContains =
+      picked === "\0custom"
+        ? unwrap(await text({ message: "link must contain", placeholder: "/comic/" })).trim()
+        : picked || undefined;
+  }
+
+  const feed: Feed = { name, url: url.trim(), emoji, linkContains, window, enabled: true };
+
+  const hit = freshItem(doc, feed);
+  log.info(
+    hit
+      ? `${emoji} would be showing right now ${c.dim(`- ${hit.title || hit.link}`)}`
+      : c.dim(`nothing ${WINDOW_LABEL[window]} right now, so the fallback ${cfg.fallback} would show`),
+  );
+
+  const next = { ...cfg, feeds: [...cfg.feeds, feed] };
+  await saveConfig(next);
+  log.success(`added ${name}`);
+  return next;
+}
+
+/* ------------------------------------------------------------ edit / remove */
+
+async function pickFeed(cfg: Config, message: string): Promise<number | null> {
+  if (cfg.feeds.length === 0) {
+    log.info(c.dim("no feeds yet"));
+    return null;
+  }
+  const i = unwrap(
+    await select<number>({
+      message,
+      options: cfg.feeds.map((f, idx) => ({
+        value: idx,
+        label: `${f.emoji} ${f.name}${f.enabled ? "" : c.dim(" (off)")}`,
+        hint: f.url,
+      })),
+    }),
+  );
+  return i;
+}
+
+async function editFeed(cfg: Config): Promise<Config> {
+  const i = await pickFeed(cfg, "edit which feed?");
+  if (i === null) return cfg;
+  const f = cfg.feeds[i]!;
+
+  const field = unwrap(
+    await select<string>({
+      message: `${f.emoji} ${f.name}`,
+      options: [
+        { value: "emoji", label: "change the emoji", hint: f.emoji },
+        { value: "name", label: "rename", hint: f.name },
+        { value: "window", label: "change freshness window", hint: WINDOW_LABEL[f.window] },
+        { value: "filter", label: "change the link filter", hint: f.linkContains ?? "none" },
+        { value: "toggle", label: f.enabled ? "disable it" : "enable it" },
+        { value: "top", label: "give it top priority" },
+      ],
+    }),
+  );
+
+  const feeds = [...cfg.feeds];
+  switch (field) {
+    case "emoji":
+      feeds[i] = { ...f, emoji: unwrap(await text({ message: "emoji", initialValue: f.emoji, validate: validEmoji })).trim() };
+      break;
+    case "name":
+      feeds[i] = { ...f, name: unwrap(await text({ message: "name", initialValue: f.name })).trim() || f.name };
+      break;
+    case "window":
+      feeds[i] = {
+        ...f,
+        window: unwrap(
+          await select<Window>({
+            message: "how fresh?",
+            options: WINDOWS.map((w) => ({ value: w, label: WINDOW_LABEL[w] })),
+            initialValue: f.window,
+          }),
+        ),
+      };
+      break;
+    case "filter": {
+      const v = unwrap(
+        await text({ message: "link must contain (empty for no filter)", initialValue: f.linkContains ?? "" }),
+      ).trim();
+      feeds[i] = { ...f, linkContains: v || undefined };
+      break;
+    }
+    case "toggle":
+      feeds[i] = { ...f, enabled: !f.enabled };
+      break;
+    case "top":
+      feeds.splice(i, 1);
+      feeds.unshift(f);
+      break;
+  }
+
+  const next = { ...cfg, feeds };
+  await saveConfig(next);
+  log.success("saved");
+  return next;
+}
+
+async function removeFeed(cfg: Config): Promise<Config> {
+  const i = await pickFeed(cfg, "remove which feed?");
+  if (i === null) return cfg;
+  const f = cfg.feeds[i]!;
+  const ok = unwrap(await confirm({ message: `remove ${f.emoji} ${f.name}?`, initialValue: false }));
+  if (!ok) {
+    log.info(c.dim("kept it"));
+    return cfg;
+  }
+  const next = { ...cfg, feeds: cfg.feeds.filter((_, idx) => idx !== i) };
+  await saveConfig(next);
+  log.success(`removed ${f.name}`);
+  return next;
+}
+
+async function setFallback(cfg: Config): Promise<Config> {
+  const v = unwrap(
+    await text({ message: "emoji when nothing is fresh", initialValue: cfg.fallback, validate: validEmoji }),
+  ).trim();
+  const next = { ...cfg, fallback: v };
+  await saveConfig(next);
+  log.success(`fallback is ${v}`);
+  return next;
+}
+
+/* ---------------------------------------------------------------- commands */
+
+async function checkNow(cfg: Config, quiet: boolean) {
+  if (quiet) {
+    await runCheck(cfg);
+    return;
+  }
+  const s = spinner();
+  const n = cfg.feeds.filter((f) => f.enabled).length;
+  s.start(`checking ${n} feed${n === 1 ? "" : "s"}`);
+  const result = await runCheck(cfg);
+  if (result.skipped) {
+    s.stop(c.dim("another check is already running"));
+    return;
+  }
+  s.stop(`${result.emoji}  ${result.winner || c.dim("nothing fresh - fallback")}`);
+  for (const f of result.feeds) {
+    if (f.error) log.warn(c.yellow(`${f.url}: ${f.error}`));
+  }
+}
+
+async function doInstall(cfg: Config) {
+  const path = await writeSnippet();
+  log.success(`wrote ${path}`);
+
+  if (await zshrcSourcesSnippet()) {
+    log.info(c.dim("~/.zshrc already sources it"));
+  } else {
+    const ok = unwrap(
+      await confirm({ message: `add the source line to ${ZSHRC}?`, initialValue: true }),
+    );
+    if (ok) {
+      const { backup } = await patchZshrc();
+      log.success(`patched ~/.zshrc ${c.dim(`(backup: ${backup})`)}`);
+    } else {
+      note(`source "${SHELL_SNIPPET}"`, "add this to ~/.zshrc yourself");
+    }
+  }
+
+  note(otherShellSnippet(EMOJI_FILE), "for any other prompt or statusline (bash/sh)");
+  log.info(c.dim("open a new shell, or run: source ~/.zshrc"));
+}
+
+/* -------------------------------------------------------------------- menu */
+
+async function menu(cfg: Config) {
+  let current = cfg;
+  for (;;) {
+    await listFeeds(current);
+    const action = unwrap(
+      await select<string>({
+        message: "what now?",
+        options: [
+          { value: "add", label: "add a feed" },
+          { value: "edit", label: "edit a feed", hint: "emoji, name, window, priority" },
+          { value: "rm", label: "remove a feed" },
+          { value: "fallback", label: "change the fallback emoji", hint: current.fallback },
+          { value: "check", label: "check every feed now" },
+          { value: "install", label: "wire it into the shell" },
+          { value: "quit", label: "done" },
+        ],
+      }),
+    );
+    switch (action) {
+      case "add":
+        current = await addFeed(current);
+        break;
+      case "edit":
+        current = await editFeed(current);
+        break;
+      case "rm":
+        current = await removeFeed(current);
+        break;
+      case "fallback":
+        current = await setFallback(current);
+        break;
+      case "check":
+        await checkNow(current, false);
+        break;
+      case "install":
+        await doInstall(current);
+        break;
+      case "quit":
+        outro(`${await cachedEmoji(current.fallback)} ${c.dim(CONFIG_FILE)}`);
+        return;
+    }
+  }
+}
+
+/* -------------------------------------------------------------------- main */
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const flags = new Set(argv.filter((a) => a.startsWith("-")));
+  const args = argv.filter((a) => !a.startsWith("-"));
+  const cmd = args[0] ?? "";
+
+  if (flags.has("-h") || flags.has("--help") || cmd === "help") {
+    process.stdout.write(HELP);
+    return;
+  }
+
+  const cfg = await loadConfig();
+
+  // `now` is the one command a prompt might call directly: cache only, no UI.
+  if (cmd === "now") {
+    if (flags.has("--refresh")) await runCheck(cfg);
+    process.stdout.write(await cachedEmoji(cfg.fallback));
+    return;
+  }
+
+  if (cmd === "check") {
+    const quiet = flags.has("--quiet");
+    // The shell hook may be the very first thing to run: seed the config so the
+    // defaults are editable instead of invisible.
+    if (!(await configExists())) await saveConfig(cfg);
+    if (!flags.has("--force")) {
+      const age = await cacheAgeSeconds();
+      if (age < cfg.ttlSeconds) {
+        if (!quiet) log.info(c.dim(`cache is ${Math.round(age / 60)}m old - use --force to fetch anyway`));
+        return;
+      }
+    }
+    if (!quiet) intro(c.title(" emoji-rss "));
+    await checkNow(cfg, quiet);
+    return;
+  }
+
+  intro(c.title(" emoji-rss "));
+
+  // First run: the defaults are seeded but nothing is on disk yet.
+  if (!(await configExists())) {
+    await saveConfig(cfg);
+    log.info(
+      `started you off with ${DEFAULT_CONFIG.feeds.map((f) => `${f.emoji} ${f.name}`).join(", ")} and a ${cfg.fallback} fallback`,
+    );
+  }
+
+  switch (cmd) {
+    case "":
+      await menu(cfg);
+      return;
+    case "add":
+      await addFeed(cfg, args[1]);
+      break;
+    case "ls":
+    case "list":
+      await listFeeds(cfg);
+      break;
+    case "rm":
+    case "remove":
+      await removeFeed(cfg);
+      break;
+    case "edit":
+      await editFeed(cfg);
+      break;
+    case "install":
+      await doInstall(cfg);
+      break;
+    default:
+      throw new Error(`unknown command: ${cmd}\n\n${HELP}`);
+  }
+  outro(c.dim(CONFIG_FILE));
+}
+
+main().catch((err) => {
+  cancel(c.red(err instanceof Error ? err.message : String(err)));
+  process.exit(1);
+});

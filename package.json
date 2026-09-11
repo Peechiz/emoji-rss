@@ -1,0 +1,23 @@
+{
+  "name": "emoji-rss",
+  "version": "0.1.0",
+  "description": "Swap the emoji in your shell prompt and Claude Code statusline based on RSS/Atom feeds that updated today",
+  "type": "module",
+  "module": "src/cli.ts",
+  "bin": {
+    "emoji-rss": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "build": "bun build ./src/cli.ts --compile --outfile emoji-rss"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.7.0"
+  }
+}
