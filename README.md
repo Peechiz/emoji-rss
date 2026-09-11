@@ -51,6 +51,9 @@ reorder, a removal — rewrites the cache immediately without a network request,
 because whether each feed is fresh is already known. `check` is for "it just
 updated and I don't want to wait", and for seeing which feeds are erroring.
 
+A searchable emoji picker is deliberately not built; `docs/emoji-picker.md` has
+the notes if free text ever gets annoying.
+
 ## How it doesn't slow down your prompt
 
 The prompt never touches the network and never forks.
