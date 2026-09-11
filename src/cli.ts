@@ -94,25 +94,25 @@ function feedLine(f: Feed, i: number, state: Awaited<ReturnType<typeof loadState
   const s = state?.feeds.find((x) => x.url === f.url);
   const showing = state?.winners.includes(f.name);
 
-  // The name itself carries the common answer: green is showing, grey is not.
-  // Only the states you cannot guess from a colour keep a word next to them.
-  const name = trunc(f.name, width - 2);
-  const [painted, note] = !f.enabled
-    ? [c.dim(name), c.dim("off")]
+  // One tone for the whole row: green is showing in your prompt, grey is not.
+  // Only the states a colour cannot name on its own keep a word next to them.
+  const tone = !f.enabled
+    ? c.dim
     : s?.error
-      ? [c.red(name), c.red("error")]
+      ? c.red
       : showing
-        ? [c.green(name), ""]
+        ? c.green
         : s?.hit
-          ? [c.yellow(name), c.yellow("over the cap")]
-          : [c.dim(name), ""];
+          ? c.yellow
+          : c.dim;
+  const note = !f.enabled ? "off" : s?.error ? "error" : s?.hit && !showing ? "over the cap" : "";
 
   // What the feed is actually doing. The freshness window used to sit here as
   // "posted in the last 24h", which read as a report next to "quiet" and said
   // the opposite thing; it is config, and `edit` is where config belongs.
   const facts = [ago(s?.latest), shortCadence(s?.cadenceDays ?? null)].filter(Boolean).join(" · ");
 
-  return `${c.dim(String(i + 1).padStart(2))} ${f.emoji} ${pad(painted, width)}${c.dim(facts || "not checked yet")}${note ? `  ${note}` : ""}`;
+  return `${tone(String(i + 1).padStart(2))} ${f.emoji} ${pad(tone(trunc(f.name, width - 2)), width)}${tone(facts || "not checked yet")}${note ? `  ${tone(note)}` : ""}`;
 }
 
 async function listFeeds(cfg: Config) {
