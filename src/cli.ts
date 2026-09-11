@@ -126,7 +126,7 @@ async function listFeeds(cfg: Config) {
   const age = await cacheAgeSeconds();
   note(
     cfg.feeds.map((f, i) => feedLine(f, i, state, width)).join("\n"),
-    `feeds ${c.dim("(order is priority)")}`,
+    "feeds",
   );
   const errored = cfg.feeds.filter((f) => state?.feeds.find((x) => x.url === f.url)?.error);
   for (const f of errored) {
@@ -311,7 +311,6 @@ async function editFeed(cfg: Config): Promise<Config> {
         { value: "window", label: "change freshness window", hint: WINDOW_LABEL[f.window] },
         { value: "filter", label: "change the link filter", hint: f.linkContains ?? "none" },
         { value: "toggle", label: f.enabled ? "disable it" : "enable it" },
-        { value: "top", label: "give it top priority" },
       ],
     }),
   );
@@ -346,16 +345,49 @@ async function editFeed(cfg: Config): Promise<Config> {
     case "toggle":
       feeds[i] = { ...f, enabled: !f.enabled };
       break;
-    case "top":
-      feeds.splice(i, 1);
-      feeds.unshift(f);
-      break;
   }
 
   const next = { ...cfg, feeds };
   await saveConfig(next);
   await recompute(next);
   log.success("saved");
+  return next;
+}
+
+async function reorder(cfg: Config): Promise<Config> {
+  if (cfg.feeds.length < 2) {
+    log.info(c.dim("need at least two feeds to reorder"));
+    return cfg;
+  }
+  const from = await pickFeed(cfg, "move which feed?");
+  if (from === null) return cfg;
+  const f = cfg.feeds[from]!;
+
+  // Positions are labelled with whoever holds them now, so "put it at 2" is
+  // legible without counting rows.
+  const to = unwrap(
+    await select<number>({
+      message: `put ${f.emoji} ${f.name} where?`,
+      options: cfg.feeds.map((other, idx) => ({
+        value: idx,
+        label: `${idx + 1}. ${idx === from ? c.dim(`${other.emoji} ${other.name}`) : `${other.emoji} ${other.name}`}`,
+        hint: idx === from ? "where it is now" : undefined,
+      })),
+      initialValue: from,
+    }),
+  );
+  if (to === from) {
+    log.info(c.dim("left where it was"));
+    return cfg;
+  }
+
+  const feeds = [...cfg.feeds];
+  feeds.splice(from, 1);
+  feeds.splice(to, 0, f);
+  const next = { ...cfg, feeds };
+  await saveConfig(next);
+  await recompute(next);
+  log.success(feeds.map((x, i) => `${i + 1} ${x.emoji}`).join("  "));
   return next;
 }
 
@@ -482,10 +514,14 @@ async function menu(cfg: Config) {
     const action = unwrap(
       await select<string>({
         message: "what now?",
+        // The heading is a disabled option: clack's cursor skips over it, so it
+        // splits the list in two without costing a keystroke.
         options: [
           { value: "add", label: "add a feed" },
-          { value: "edit", label: "edit a feed", hint: "emoji, name, window, priority" },
+          { value: "edit", label: "edit a feed", hint: "emoji, name, window, filter" },
           { value: "rm", label: "remove a feed" },
+          { value: "-", label: c.dim("── config ───────────────────"), disabled: true },
+          { value: "order", label: "reorder feeds", hint: "priority when more are fresh than fit" },
           { value: "fallback", label: "change the fallback emoji", hint: current.fallback },
           { value: "max", label: "how many emoji can show at once", hint: String(current.maxEmoji) },
           { value: "check", label: "check every feed now" },
@@ -502,6 +538,9 @@ async function menu(cfg: Config) {
         break;
       case "rm":
         current = await removeFeed(current);
+        break;
+      case "order":
+        current = await reorder(current);
         break;
       case "fallback":
         current = await setFallback(current);
