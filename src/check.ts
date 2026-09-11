@@ -65,7 +65,7 @@ export async function runCheck(cfg: Config): Promise<CheckResult> {
     return {
       checkedAt: previous?.checkedAt ?? 0,
       emoji: previous?.emoji ?? cfg.fallback,
-      winner: previous?.winner ?? "",
+      winners: previous?.winners ?? [],
       feeds: previous?.feeds ?? [],
       skipped: true,
     };
@@ -74,13 +74,13 @@ export async function runCheck(cfg: Config): Promise<CheckResult> {
   try {
     const enabled = cfg.feeds.filter((f) => f.enabled);
     const results = await Promise.all(enabled.map((f) => checkFeed(f, prevByUrl.get(f.url))));
-    // Config order is priority: first feed with a fresh item wins.
-    const winnerIndex = results.findIndex((r) => r.hit);
-    const winner = winnerIndex >= 0 ? enabled[winnerIndex]! : null;
+    // Every fresh feed shows. Config order is priority, which only matters once
+    // more feeds are fresh than maxEmoji leaves room for.
+    const winners = enabled.filter((_, i) => results[i]?.hit).slice(0, cfg.maxEmoji);
     const state: State = {
       checkedAt: Date.now(),
-      emoji: winner?.emoji ?? cfg.fallback,
-      winner: winner?.name ?? "",
+      emoji: winners.length ? winners.map((f) => f.emoji).join("") : cfg.fallback,
+      winners: winners.map((f) => f.name),
       feeds: results,
     };
     await saveState(state);

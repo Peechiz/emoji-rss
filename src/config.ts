@@ -22,7 +22,9 @@ export type Config = {
   fallback: string;
   /** How long a cached result stays good before a prompt triggers a refresh. */
   ttlSeconds: number;
-  /** Order is priority: the first enabled feed with a hit wins. */
+  /** Cap on emoji shown at once, so a busy day can't run away with the prompt. */
+  maxEmoji: number;
+  /** Order is priority: when more feeds are fresh than fit, the top ones show. */
   feeds: Feed[];
   /** Set once the user says no to wiring up the shell, so it stops asking. */
   skipShellPrompt?: boolean;
@@ -40,9 +42,10 @@ export type FeedState = {
 
 export type State = {
   checkedAt: number;
+  /** Every showing emoji, concatenated. The fallback when nothing is fresh. */
   emoji: string;
-  /** Name of the feed that won, or "" for the fallback. */
-  winner: string;
+  /** Names of the feeds showing, in priority order; empty for the fallback. */
+  winners: string[];
   feeds: FeedState[];
 };
 
@@ -63,6 +66,7 @@ export const DEFAULT_CONFIG: Config = {
   version: 1,
   fallback: DEFAULT_FALLBACK,
   ttlSeconds: 1800,
+  maxEmoji: 3,
   feeds: [
     {
       name: "Kill Six Billion Demons",
@@ -83,6 +87,7 @@ export async function loadConfig(): Promise<Config> {
     version: 1,
     fallback: raw.fallback || DEFAULT_FALLBACK,
     ttlSeconds: typeof raw.ttlSeconds === "number" ? raw.ttlSeconds : 1800,
+    maxEmoji: typeof raw.maxEmoji === "number" && raw.maxEmoji > 0 ? raw.maxEmoji : 3,
     skipShellPrompt: raw.skipShellPrompt === true ? true : undefined,
     feeds: (raw.feeds ?? []).map((f) => ({
       name: f.name ?? f.url,
@@ -115,7 +120,10 @@ export async function loadState(): Promise<State | null> {
   const file = Bun.file(STATE_FILE);
   if (!(await file.exists())) return null;
   try {
-    return (await file.json()) as State;
+    const raw = (await file.json()) as State & { winner?: string };
+    // State written before multiple emoji could show at once.
+    if (!raw.winners) raw.winners = raw.winner ? [raw.winner] : [];
+    return raw;
   } catch {
     return null;
   }

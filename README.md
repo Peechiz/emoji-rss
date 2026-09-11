@@ -1,13 +1,14 @@
 # emoji-rss
 
 The emoji at the front of your prompt, driven by RSS/Atom feeds. Kill Six Billion
-Demons posted today → 😈. It didn't → 🔥. Add your own feed/emoji pairs with a CLI.
+Demons posted today → 😈. That and a rocket launch → 😈🚀. Neither → 🔥. Add your
+own feed/emoji pairs with a CLI.
 
 Works in the zsh prompt and in the Claude Code statusline at the same time, off
 one shared cache file.
 
 ```
-😈 emoji-rss [main ●] | Opus 5 | 91%
+😈🚀 emoji-rss [main ●] | Opus 5 | 91%
 ```
 
 ## Install
@@ -64,6 +65,7 @@ The prompt never touches the network and never forks.
   "version": 1,
   "fallback": "🔥",
   "ttlSeconds": 1800,
+  "maxEmoji": 3,
   "feeds": [
     {
       "name": "Kill Six Billion Demons",
@@ -77,8 +79,11 @@ The prompt never touches the network and never forks.
 }
 ```
 
-- **Order is priority.** The first enabled feed with a fresh item wins; the rest
-  are ignored. `edit → give it top priority` reorders.
+- **Every fresh feed shows**, concatenated in config order: three feeds updated
+  today gives you `😈🚀🍊`.
+- **`maxEmoji`** caps that at 3 so a busy day can't run away with your prompt.
+  When more feeds are fresh than fit, order decides who gets cut — `edit → give
+  it top priority` reorders, and `ls` marks the rest "fresh, over the cap".
 - **`window`** is `today` (local calendar day), `24h`, or `7d`.
 - **`linkContains`** filters by item link. KSBD's feed carries both comic pages
   and "next update Thursday" news posts; `/comic/` counts only the comics.

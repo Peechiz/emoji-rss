@@ -55,7 +55,8 @@ how it works:
   the winning emoji is written to ${EMOJI_FILE}
   your prompt reads that one file and never waits on the network; it spawns a
   detached \`emoji-rss check\` only when the cache goes stale.
-  feed order is priority - the first enabled feed with a fresh item wins.
+  every feed with a fresh item shows its emoji, side by side. feed order is
+  priority, which decides who gets cut when more are fresh than maxEmoji allows.
 `;
 
 const WINDOWS: Window[] = ["today", "24h", "7d"];
@@ -82,15 +83,18 @@ const validEmoji = (v: string | undefined) => {
 
 function feedLine(f: Feed, i: number, state: Awaited<ReturnType<typeof loadState>>, width: number) {
   const s = state?.feeds.find((x) => x.url === f.url);
+  const showing = state?.winners.includes(f.name);
   const status = !f.enabled
     ? c.dim("off")
     : s?.error
       ? c.yellow(`! ${s.error}`)
-      : s?.hit
-        ? c.green("fresh")
-        : s
-          ? c.dim("quiet")
-          : c.dim("unchecked");
+      : showing
+        ? c.green("showing")
+        : s?.hit
+          ? c.yellow("fresh, over the cap")
+          : s
+            ? c.dim("quiet")
+            : c.dim("unchecked");
   const filter = f.linkContains ? c.dim(` link~${f.linkContains}`) : "";
   return `${c.dim(String(i + 1).padStart(2))} ${f.emoji} ${pad(f.name, width)}${status}  ${c.dim(WINDOW_LABEL[f.window])}${filter}`;
 }
@@ -109,9 +113,8 @@ async function listFeeds(cfg: Config) {
     `feeds ${c.dim("(order is priority)")}`,
   );
   const when = Number.isFinite(age) ? `checked ${Math.round(age / 60)}m ago` : "never checked";
-  log.info(
-    `showing ${showing}  ${c.dim(state?.winner ? `${state.winner} - ${when}` : `fallback - ${when}`)}`,
-  );
+  const who = state?.winners.length ? state.winners.join(" + ") : "fallback";
+  log.info(`showing ${showing}  ${c.dim(`${who} - ${when}`)}`);
 }
 
 /* -------------------------------------------------------------- add a feed */
@@ -201,11 +204,14 @@ async function addFeed(cfg: Config, preset?: string): Promise<Config> {
   const feed: Feed = { name, url: url.trim(), emoji, linkContains, window, enabled: true };
 
   const hit = freshItem(doc, feed);
-  log.info(
-    hit
-      ? `${emoji} would be showing right now ${c.dim(`- ${hit.title || hit.link}`)}`
-      : c.dim(`nothing ${WINDOW_LABEL[window]} right now, so the fallback ${cfg.fallback} would show`),
-  );
+  if (hit) {
+    const alongside = (await loadState())?.winners.length ?? 0;
+    log.info(
+      `${emoji} would be showing right now ${c.dim(`- ${hit.title || hit.link}${alongside ? `, alongside ${alongside} other${alongside === 1 ? "" : "s"}` : ""}`)}`,
+    );
+  } else {
+    log.info(c.dim(`nothing ${WINDOW_LABEL[window]} right now, so ${emoji} would stay hidden`));
+  }
 
   let next = { ...cfg, feeds: [...cfg.feeds, feed] };
   await saveConfig(next);
@@ -325,6 +331,23 @@ async function setFallback(cfg: Config): Promise<Config> {
 
 /* ---------------------------------------------------------------- commands */
 
+async function setMaxEmoji(cfg: Config): Promise<Config> {
+  const v = unwrap(
+    await select<number>({
+      message: "most emoji to show at once",
+      options: [1, 2, 3, 4, 5].map((n) => ({
+        value: n,
+        label: n === 1 ? "1 - only the top priority feed" : `${n}`,
+      })),
+      initialValue: cfg.maxEmoji,
+    }),
+  );
+  const next = { ...cfg, maxEmoji: v };
+  await saveConfig(next);
+  log.success(`up to ${v} at once`);
+  return next;
+}
+
 async function checkNow(cfg: Config, quiet: boolean) {
   if (quiet) {
     await runCheck(cfg);
@@ -338,7 +361,7 @@ async function checkNow(cfg: Config, quiet: boolean) {
     s.stop(c.dim("another check is already running"));
     return;
   }
-  s.stop(`${result.emoji}  ${result.winner || c.dim("nothing fresh - fallback")}`);
+  s.stop(`${result.emoji}  ${result.winners.join(" + ") || c.dim("nothing fresh - fallback")}`);
   for (const f of result.feeds) {
     if (f.error) log.warn(c.yellow(`${f.url}: ${f.error}`));
   }
@@ -406,6 +429,7 @@ async function menu(cfg: Config) {
           { value: "edit", label: "edit a feed", hint: "emoji, name, window, priority" },
           { value: "rm", label: "remove a feed" },
           { value: "fallback", label: "change the fallback emoji", hint: current.fallback },
+          { value: "max", label: "how many emoji can show at once", hint: String(current.maxEmoji) },
           { value: "check", label: "check every feed now" },
           { value: "quit", label: "done" },
         ],
@@ -423,6 +447,9 @@ async function menu(cfg: Config) {
         break;
       case "fallback":
         current = await setFallback(current);
+        break;
+      case "max":
+        current = await setMaxEmoji(current);
         break;
       case "check":
         await checkNow(current, false);
