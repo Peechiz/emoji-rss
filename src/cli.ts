@@ -190,7 +190,7 @@ async function addFeed(cfg: Config, preset?: string): Promise<Config> {
   );
 
   const emoji = unwrap(
-    await text({ message: `emoji for ${name}`, placeholder: "😈", validate: validEmoji }),
+    await text({ message: `emoji for ${name}`, validate: validEmoji }),
   ).trim();
 
   // A window as long as the feed's own cadence means the emoji is always on,
