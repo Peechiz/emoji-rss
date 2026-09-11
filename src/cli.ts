@@ -423,10 +423,10 @@ async function setFallback(cfg: Config): Promise<Config> {
 async function setMaxEmoji(cfg: Config): Promise<Config> {
   const v = unwrap(
     await select<number>({
-      message: "most emoji to show at once",
+      message: "character limit",
       options: [1, 2, 3, 4, 5].map((n) => ({
         value: n,
-        label: n === 1 ? "1 - only the top priority feed" : `${n}`,
+        label: n === 1 ? `1 ${c.dim("- only the top priority feed")}` : `${n}`,
       })),
       initialValue: cfg.maxEmoji,
     }),
@@ -507,6 +507,40 @@ async function doInstall(cfg: Config): Promise<Config> {
 
 /* -------------------------------------------------------------------- menu */
 
+async function configMenu(cfg: Config): Promise<Config> {
+  let current = cfg;
+  for (;;) {
+    const action = unwrap(
+      await select<string>({
+        message: "config",
+        options: [
+          { value: "order", label: "reorder feeds", hint: "priority when more are fresh than fit" },
+          { value: "fallback", label: "change the fallback emoji", hint: current.fallback },
+          { value: "max", label: `character limit ${c.dim(`(${current.maxEmoji})`)}` },
+          { value: "check", label: "check every feed now" },
+          { value: "back", label: "back" },
+        ],
+      }),
+    );
+    switch (action) {
+      case "order":
+        current = await reorder(current);
+        break;
+      case "fallback":
+        current = await setFallback(current);
+        break;
+      case "max":
+        current = await setMaxEmoji(current);
+        break;
+      case "check":
+        await checkNow(current, false);
+        break;
+      case "back":
+        return current;
+    }
+  }
+}
+
 async function menu(cfg: Config) {
   let current = cfg;
   for (;;) {
@@ -514,17 +548,11 @@ async function menu(cfg: Config) {
     const action = unwrap(
       await select<string>({
         message: "what now?",
-        // The heading is a disabled option: clack's cursor skips over it, so it
-        // splits the list in two without costing a keystroke.
         options: [
           { value: "add", label: "add a feed" },
           { value: "edit", label: "edit a feed", hint: "emoji, name, window, filter" },
           { value: "rm", label: "remove a feed" },
-          { value: "-", label: c.dim("── config ───────────────────"), disabled: true },
-          { value: "order", label: "reorder feeds", hint: "priority when more are fresh than fit" },
-          { value: "fallback", label: "change the fallback emoji", hint: current.fallback },
-          { value: "max", label: "how many emoji can show at once", hint: String(current.maxEmoji) },
-          { value: "check", label: "check every feed now" },
+          { value: "config", label: "config", hint: "order, fallback, limit, refresh" },
           { value: "quit", label: "done" },
         ],
       }),
@@ -539,17 +567,8 @@ async function menu(cfg: Config) {
       case "rm":
         current = await removeFeed(current);
         break;
-      case "order":
-        current = await reorder(current);
-        break;
-      case "fallback":
-        current = await setFallback(current);
-        break;
-      case "max":
-        current = await setMaxEmoji(current);
-        break;
-      case "check":
-        await checkNow(current, false);
+      case "config":
+        current = await configMenu(current);
         break;
       case "quit":
         outro(`${await cachedEmoji(current.fallback)} ${c.dim(CONFIG_FILE)}`);

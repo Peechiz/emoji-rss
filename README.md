@@ -31,7 +31,7 @@ snippet for any prompt it will not edit (a bash statusline, tmux, whatever).
 ## Use
 
 ```sh
-emoji-rss                 # menu: add / edit / reorder / remove / check
+emoji-rss                 # menu: add / edit / remove, with config one level down
 emoji-rss add <url>       # fetch the feed, name it, pick an emoji
 emoji-rss ls              # feeds in priority order, when each last posted
 emoji-rss check --force   # fetch now, rather than waiting out the ttl
@@ -104,7 +104,8 @@ The prompt never touches the network and never forks.
 
 - **Every fresh feed shows**, concatenated in config order: three feeds updated
   today gives you `😈🚀🍊`.
-- **`maxEmoji`** caps that at 3 so a busy day can't run away with your prompt.
+- **`maxEmoji`** ("character limit" in the menu) caps that at 3, so a busy day
+  can't run away with your prompt.
   When more feeds are fresh than fit, order decides who gets cut — `config →
   reorder feeds` moves one, and `ls` marks the rest "over the cap".
 - **`window`** is `today` (local calendar day), `24h`, or `7d`. A window as long
