@@ -24,6 +24,8 @@ export type Config = {
   ttlSeconds: number;
   /** Order is priority: the first enabled feed with a hit wins. */
   feeds: Feed[];
+  /** Set once the user says no to wiring up the shell, so it stops asking. */
+  skipShellPrompt?: boolean;
 };
 
 /** Per-feed result of the last check, kept so a failed fetch never clears a hit. */
@@ -81,6 +83,7 @@ export async function loadConfig(): Promise<Config> {
     version: 1,
     fallback: raw.fallback || DEFAULT_FALLBACK,
     ttlSeconds: typeof raw.ttlSeconds === "number" ? raw.ttlSeconds : 1800,
+    skipShellPrompt: raw.skipShellPrompt === true ? true : undefined,
     feeds: (raw.feeds ?? []).map((f) => ({
       name: f.name ?? f.url,
       url: f.url,

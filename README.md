@@ -16,16 +16,21 @@ one shared cache file.
 bun install
 bun run build          # produces ./emoji-rss
 ln -s "$PWD/emoji-rss" ~/.local/bin/emoji-rss
-emoji-rss install      # writes the zsh hook, offers to source it from ~/.zshrc
+emoji-rss add <url>    # it offers to wire up your shell on the way
 ```
 
-`install` keeps a backup at `~/.zshrc.emoji-rss.bak` and prints a plain sh
-snippet for any other prompt (a bash statusline, tmux, whatever).
+There is no separate setup step. Any interactive run refreshes the zsh hook at
+`~/.config/emoji-rss/emoji-rss.zsh`, and if your prompt is not reading it yet,
+adding a feed offers to append the one `source` line to `~/.zshrc`. Say no and
+it stops asking.
+
+`emoji-rss install` does the same wiring on demand, and prints a plain sh
+snippet for any prompt it will not edit (a bash statusline, tmux, whatever).
 
 ## Use
 
 ```sh
-emoji-rss                 # menu: add / edit / reorder / remove / check / install
+emoji-rss                 # menu: add / edit / reorder / remove / check
 emoji-rss add <url>       # fetch the feed, name it, pick an emoji
 emoji-rss ls              # feeds, priority order, what the last check found
 emoji-rss check --force   # fetch now

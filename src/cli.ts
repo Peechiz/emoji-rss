@@ -28,7 +28,7 @@ import {
 } from "./config.ts";
 import { runCheck } from "./check.ts";
 import { WINDOW_LABEL, fetchFeed, freshItem, type FeedDoc } from "./feed.ts";
-import { ZSHRC, otherShellSnippet, patchZshrc, writeSnippet, zshrcSourcesSnippet } from "./install.ts";
+import { SOURCE_LINE, ZSHRC, ensureSnippet, otherShellSnippet, patchZshrc, zshrcSourcesSnippet } from "./install.ts";
 import { c, pad } from "./theme.ts";
 
 const HELP = `emoji-rss - your prompt emoji, driven by RSS/Atom feeds
@@ -207,9 +207,13 @@ async function addFeed(cfg: Config, preset?: string): Promise<Config> {
       : c.dim(`nothing ${WINDOW_LABEL[window]} right now, so the fallback ${cfg.fallback} would show`),
   );
 
-  const next = { ...cfg, feeds: [...cfg.feeds, feed] };
+  let next = { ...cfg, feeds: [...cfg.feeds, feed] };
   await saveConfig(next);
   log.success(`added ${name}`);
+
+  // A feed nothing reads is not actually added, so check the wiring here rather
+  // than leaving it as a separate step the user has to know about.
+  next = await ensureWired(next);
   return next;
 }
 
@@ -340,26 +344,52 @@ async function checkNow(cfg: Config, quiet: boolean) {
   }
 }
 
-async function doInstall(cfg: Config) {
-  const path = await writeSnippet();
-  log.success(`wrote ${path}`);
+/**
+ * Keep the shell wiring true without making it a separate chore: refresh the
+ * hook file silently, and only speak up if the prompt is not reading it yet.
+ * Returns the config because saying no is remembered.
+ */
+async function ensureWired(cfg: Config, verbose = false): Promise<Config> {
+  const snippet = await ensureSnippet();
+  if (verbose && snippet === "current") log.info(c.dim(`hook is current: ${SHELL_SNIPPET}`));
+  if (verbose && snippet === "written") log.success(`wrote ${SHELL_SNIPPET}`);
 
   if (await zshrcSourcesSnippet()) {
-    log.info(c.dim("~/.zshrc already sources it"));
-  } else {
-    const ok = unwrap(
-      await confirm({ message: `add the source line to ${ZSHRC}?`, initialValue: true }),
-    );
-    if (ok) {
-      const { backup } = await patchZshrc();
-      log.success(`patched ~/.zshrc ${c.dim(`(backup: ${backup})`)}`);
-    } else {
-      note(`source "${SHELL_SNIPPET}"`, "add this to ~/.zshrc yourself");
-    }
+    if (verbose) log.info(c.dim("~/.zshrc already sources it"));
+    return cfg;
   }
 
+  if (cfg.skipShellPrompt && !verbose) return cfg;
+
+  log.warn(c.yellow("your prompt is not reading this yet"));
+  const ok = unwrap(
+    await confirm({ message: `add one line to ${ZSHRC} so it does?`, initialValue: true }),
+  );
+  if (ok) {
+    await patchZshrc();
+    log.success("wired up - open a new tab, or run: source ~/.zshrc");
+    if (cfg.skipShellPrompt) {
+      const next = { ...cfg, skipShellPrompt: undefined };
+      await saveConfig(next);
+      return next;
+    }
+    return cfg;
+  }
+
+  note(SOURCE_LINE, "add this to ~/.zshrc yourself");
+  if (!cfg.skipShellPrompt) {
+    const next = { ...cfg, skipShellPrompt: true };
+    await saveConfig(next);
+    log.info(c.dim("won't ask again - `emoji-rss install` when you want it"));
+    return next;
+  }
+  return cfg;
+}
+
+async function doInstall(cfg: Config): Promise<Config> {
+  const next = await ensureWired(cfg, true);
   note(otherShellSnippet(EMOJI_FILE), "for any other prompt or statusline (bash/sh)");
-  log.info(c.dim("open a new shell, or run: source ~/.zshrc"));
+  return next;
 }
 
 /* -------------------------------------------------------------------- menu */
@@ -377,7 +407,6 @@ async function menu(cfg: Config) {
           { value: "rm", label: "remove a feed" },
           { value: "fallback", label: "change the fallback emoji", hint: current.fallback },
           { value: "check", label: "check every feed now" },
-          { value: "install", label: "wire it into the shell" },
           { value: "quit", label: "done" },
         ],
       }),
@@ -397,9 +426,6 @@ async function menu(cfg: Config) {
         break;
       case "check":
         await checkNow(current, false);
-        break;
-      case "install":
-        await doInstall(current);
         break;
       case "quit":
         outro(`${await cachedEmoji(current.fallback)} ${c.dim(CONFIG_FILE)}`);
@@ -449,34 +475,37 @@ async function main() {
 
   intro(c.title(" emoji-rss "));
 
+  let config = cfg;
+
   // First run: the defaults are seeded but nothing is on disk yet.
   if (!(await configExists())) {
-    await saveConfig(cfg);
+    await saveConfig(config);
     log.info(
-      `started you off with ${DEFAULT_CONFIG.feeds.map((f) => `${f.emoji} ${f.name}`).join(", ")} and a ${cfg.fallback} fallback`,
+      `started you off with ${DEFAULT_CONFIG.feeds.map((f) => `${f.emoji} ${f.name}`).join(", ")} and a ${config.fallback} fallback`,
     );
+    config = await ensureWired(config);
   }
 
   switch (cmd) {
     case "":
-      await menu(cfg);
+      await menu(config);
       return;
     case "add":
-      await addFeed(cfg, args[1]);
+      await addFeed(config, args[1]);
       break;
     case "ls":
     case "list":
-      await listFeeds(cfg);
+      await listFeeds(config);
       break;
     case "rm":
     case "remove":
-      await removeFeed(cfg);
+      await removeFeed(config);
       break;
     case "edit":
-      await editFeed(cfg);
+      await editFeed(config);
       break;
     case "install":
-      await doInstall(cfg);
+      await doInstall(config);
       break;
     default:
       throw new Error(`unknown command: ${cmd}\n\n${HELP}`);
