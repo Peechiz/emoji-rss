@@ -27,7 +27,7 @@ import {
   type Window,
 } from "./config.ts";
 import { recompute, runCheck } from "./check.ts";
-import { WINDOW_LABEL, fetchFeed, freshItem, type FeedDoc } from "./feed.ts";
+import { WINDOW_LABEL, cadenceDays, describeCadence, fetchFeed, freshItem, type FeedDoc } from "./feed.ts";
 import { SOURCE_LINE, ZSHRC, ensureSnippet, otherShellSnippet, patchZshrc, zshrcSourcesSnippet } from "./install.ts";
 import { c, pad } from "./theme.ts";
 
@@ -60,6 +60,15 @@ how it works:
 `;
 
 const WINDOWS: Window[] = ["today", "24h", "7d"];
+
+/** Last-resort feed name, for the rare feed with no <title> of its own. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
 
 function bail(message: string): never {
   cancel(message);
@@ -119,7 +128,12 @@ async function listFeeds(cfg: Config) {
 
 /* -------------------------------------------------------------- add a feed */
 
-/** Offer the path prefixes actually present in the feed, e.g. /comic/ vs /blog/. */
+/**
+ * Path prefixes worth offering as a filter, e.g. /comic/ next to a feed's news
+ * posts. Prefixes that appear once are the feed's own item slugs (xkcd gives
+ * every comic its own), so they are noise; if what is left covers every item
+ * there is nothing to filter and the question should not be asked at all.
+ */
 function linkFilterChoices(doc: FeedDoc): { value: string; count: number }[] {
   const counts = new Map<string, number>();
   for (const item of doc.items) {
@@ -128,9 +142,12 @@ function linkFilterChoices(doc: FeedDoc): { value: string; count: number }[] {
       if (seg) counts.set(`/${seg}/`, (counts.get(`/${seg}/`) ?? 0) + 1);
     } catch {}
   }
-  return [...counts.entries()]
+  const groups = [...counts.entries()]
+    .filter(([, count]) => count > 1)
     .map(([value, count]) => ({ value, count }))
     .sort((a, b) => b.count - a.count);
+  const covered = groups.reduce((n, g) => n + g.count, 0);
+  return covered === doc.items.length ? [] : groups;
 }
 
 async function addFeed(cfg: Config, preset?: string): Promise<Config> {
@@ -155,31 +172,47 @@ async function addFeed(cfg: Config, preset?: string): Promise<Config> {
     s.stop(c.red("no items in that feed - is it really RSS or Atom?"));
     return cfg;
   }
+  // The feed says what it is called, so don't make the user retype it. Renaming
+  // lives in `edit` for the rare feed whose own title is useless.
+  const name = (doc.title || hostOf(url)).trim();
+  const cadence = cadenceDays(doc);
   const newest = doc.items.find((i) => i.date)?.date;
   s.stop(
-    `${doc.title || url} ${c.dim(`- ${doc.items.length} items${newest ? `, newest ${newest.toLocaleDateString()}` : ""}`)}`,
+    `${c.bold(name)} ${c.dim(
+      [
+        `${doc.items.length} items`,
+        newest ? `newest ${newest.toLocaleDateString()}` : "",
+        describeCadence(cadence),
+      ]
+        .filter(Boolean)
+        .join(", "),
+    )}`,
   );
 
-  const name = unwrap(
-    await text({ message: "name it", initialValue: doc.title || url, validate: (v) => (v?.trim() ? undefined : "needs a name") }),
-  ).trim();
-
   const emoji = unwrap(
-    await text({ message: "emoji to show when it updates", placeholder: "😈", validate: validEmoji }),
+    await text({ message: `emoji for ${name}`, placeholder: "😈", validate: validEmoji }),
   ).trim();
 
+  // A window as long as the feed's own cadence means the emoji is always on,
+  // which says nothing. Weekly and faster get "today"; rarer feeds would be too
+  // easy to miss that way, so they get the week after a drop.
+  const suggested: Window = cadence === null || cadence < 10 ? "today" : "7d";
   const window = unwrap(
     await select<Window>({
       message: "how fresh does an item have to be?",
-      options: WINDOWS.map((w) => ({ value: w, label: WINDOW_LABEL[w] })),
-      initialValue: "today" as Window,
+      options: WINDOWS.map((w) => ({
+        value: w,
+        label: WINDOW_LABEL[w],
+        hint: w === suggested && cadence !== null ? `it ${describeCadence(cadence)}` : undefined,
+      })),
+      initialValue: suggested,
     }),
   );
 
   // A filter matters for feeds that mix content (comic pages vs news posts).
   let linkContains: string | undefined;
   const choices = linkFilterChoices(doc);
-  if (choices.length > 1) {
+  if (choices.length > 0) {
     const picked = unwrap(
       await select<string>({
         message: "which items count?",
@@ -223,7 +256,9 @@ async function addFeed(cfg: Config, preset?: string): Promise<Config> {
     item: hit?.link,
     checkedAt: Date.now(),
   });
-  log.success(`added ${name} - your prompt now shows ${state.emoji}`);
+  log.success(
+    `added ${name} - your prompt now shows ${state.emoji} ${c.dim("(edit renames it)")}`,
+  );
 
   // A feed nothing reads is not actually added, so check the wiring here rather
   // than leaving it as a separate step the user has to know about.

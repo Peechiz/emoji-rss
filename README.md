@@ -38,9 +38,12 @@ emoji-rss check --force   # fetch now, rather than waiting out the ttl
 emoji-rss now             # print the emoji the prompt is showing (no network)
 ```
 
-Adding a feed fetches it first, so the prompts are answerable: it shows you the
-item count, the newest item's date, which path prefixes the links use, and
-whether your new emoji would be showing right now.
+Adding a feed fetches it first and uses what it finds, so it only asks you
+things the feed can't answer. It takes the name from the feed's own title,
+reports how often it posts, preselects a freshness window that matches that
+cadence, and skips the link-filter question entirely unless the feed actually
+mixes content. In practice adding a feed is a url and an emoji. `edit → rename`
+is there for the rare feed whose own title is useless.
 
 You rarely need `check`. The prompt refreshes itself in the background every 30
 minutes, and any change you make in the CLI — a new feed, a different emoji, a
@@ -90,7 +93,10 @@ The prompt never touches the network and never forks.
 - **`maxEmoji`** caps that at 3 so a busy day can't run away with your prompt.
   When more feeds are fresh than fit, order decides who gets cut — `edit → give
   it top priority` reorders, and `ls` marks the rest "fresh, over the cap".
-- **`window`** is `today` (local calendar day), `24h`, or `7d`.
+- **`window`** is `today` (local calendar day), `24h`, or `7d`. A window as long
+  as the feed's own posting cadence leaves the emoji permanently on, which says
+  nothing, so `add` suggests `today` for anything weekly or faster and `7d` for
+  rarer feeds.
 - **`linkContains`** filters by item link. KSBD's feed carries both comic pages
   and "next update Thursday" news posts; `/comic/` counts only the comics.
 

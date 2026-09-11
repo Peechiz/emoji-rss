@@ -116,3 +116,31 @@ export function freshItem(doc: FeedDoc, feed: Feed, now = new Date()): Item | nu
   }
   return null;
 }
+
+/**
+ * Median days between recent items. Used to pick a sensible freshness window:
+ * a daily comic and a fortnightly podcast want very different answers, and the
+ * feed already says which it is.
+ */
+export function cadenceDays(doc: FeedDoc): number | null {
+  const dates = doc.items
+    .map((i) => i.date)
+    .filter((d): d is Date => d !== null)
+    .sort((a, b) => b.getTime() - a.getTime())
+    .slice(0, 12);
+  if (dates.length < 3) return null;
+  const gaps = dates
+    .slice(1)
+    .map((d, i) => (dates[i]!.getTime() - d.getTime()) / 86400000)
+    .sort((a, b) => a - b);
+  return gaps[Math.floor(gaps.length / 2)] ?? null;
+}
+
+export function describeCadence(days: number | null): string {
+  if (days === null) return "";
+  if (days < 1.5) return "posts about daily";
+  if (days < 3) return "posts every couple of days";
+  if (days < 10) return "posts about weekly";
+  if (days < 20) return "posts about every two weeks";
+  return "posts about monthly";
+}
