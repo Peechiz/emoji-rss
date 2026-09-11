@@ -26,7 +26,7 @@ import {
   type Feed,
   type Window,
 } from "./config.ts";
-import { runCheck } from "./check.ts";
+import { recompute, runCheck } from "./check.ts";
 import { WINDOW_LABEL, fetchFeed, freshItem, type FeedDoc } from "./feed.ts";
 import { SOURCE_LINE, ZSHRC, ensureSnippet, otherShellSnippet, patchZshrc, zshrcSourcesSnippet } from "./install.ts";
 import { c, pad } from "./theme.ts";
@@ -40,7 +40,7 @@ commands:
   add [url]        add a feed and pick its emoji
   ls               list feeds and what the last check found
   rm               remove a feed
-  check            fetch every feed now and rewrite the cache
+  check            fetch every feed now, instead of waiting out the ttl
   now              print the emoji the prompt is currently showing
   install          write the zsh hook and wire it into ~/.zshrc
   help             this text
@@ -215,7 +215,15 @@ async function addFeed(cfg: Config, preset?: string): Promise<Config> {
 
   let next = { ...cfg, feeds: [...cfg.feeds, feed] };
   await saveConfig(next);
-  log.success(`added ${name}`);
+  // The fetch above already answered "is it fresh", so the prompt can pick this
+  // feed up now instead of waiting out the ttl. No second request.
+  const state = await recompute(next, {
+    url: feed.url,
+    hit: Boolean(hit),
+    item: hit?.link,
+    checkedAt: Date.now(),
+  });
+  log.success(`added ${name} - your prompt now shows ${state.emoji}`);
 
   // A feed nothing reads is not actually added, so check the wiring here rather
   // than leaving it as a separate step the user has to know about.
@@ -300,6 +308,7 @@ async function editFeed(cfg: Config): Promise<Config> {
 
   const next = { ...cfg, feeds };
   await saveConfig(next);
+  await recompute(next);
   log.success("saved");
   return next;
 }
@@ -315,6 +324,7 @@ async function removeFeed(cfg: Config): Promise<Config> {
   }
   const next = { ...cfg, feeds: cfg.feeds.filter((_, idx) => idx !== i) };
   await saveConfig(next);
+  await recompute(next);
   log.success(`removed ${f.name}`);
   return next;
 }
@@ -325,6 +335,7 @@ async function setFallback(cfg: Config): Promise<Config> {
   ).trim();
   const next = { ...cfg, fallback: v };
   await saveConfig(next);
+  await recompute(next);
   log.success(`fallback is ${v}`);
   return next;
 }
@@ -344,6 +355,7 @@ async function setMaxEmoji(cfg: Config): Promise<Config> {
   );
   const next = { ...cfg, maxEmoji: v };
   await saveConfig(next);
+  await recompute(next);
   log.success(`up to ${v} at once`);
   return next;
 }

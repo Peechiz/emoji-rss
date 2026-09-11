@@ -56,6 +56,40 @@ async function checkFeed(feed: Feed, previous?: FeedState): Promise<FeedState> {
 
 export type CheckResult = State & { skipped: boolean };
 
+/** Config order is priority; it only bites once more feeds are fresh than fit. */
+function buildState(cfg: Config, results: FeedState[]): State {
+  const hitByUrl = new Map(results.map((r) => [r.url, r.hit]));
+  const winners = cfg.feeds
+    .filter((f) => f.enabled && hitByUrl.get(f.url))
+    .slice(0, cfg.maxEmoji);
+  return {
+    checkedAt: Date.now(),
+    emoji: winners.length ? winners.map((f) => f.emoji).join("") : cfg.fallback,
+    winners: winners.map((f) => f.name),
+    feeds: results,
+  };
+}
+
+/**
+ * Rewrite the cache from results already on disk, without touching the network.
+ *
+ * Editing an emoji, reordering, removing a feed or changing the cap all change
+ * what should be showing but nothing about what is fresh, so the prompt can
+ * catch up immediately instead of waiting out the ttl.
+ */
+export async function recompute(cfg: Config, seed?: FeedState): Promise<State> {
+  const previous = await loadState();
+  const byUrl = new Map((previous?.feeds ?? []).map((f) => [f.url, f]));
+  if (seed) byUrl.set(seed.url, seed);
+  // Drop results for feeds that are gone, keep the order config expects.
+  const results = cfg.feeds.map((f) => byUrl.get(f.url)).filter((r): r is FeedState => Boolean(r));
+  const state = buildState(cfg, results);
+  // Keep the age of the real network check: a recompute must not reset the ttl.
+  state.checkedAt = previous?.checkedAt ?? 0;
+  await saveState(state);
+  return state;
+}
+
 export async function runCheck(cfg: Config): Promise<CheckResult> {
   const previous = await loadState();
   const prevByUrl = new Map((previous?.feeds ?? []).map((f) => [f.url, f]));
@@ -74,15 +108,7 @@ export async function runCheck(cfg: Config): Promise<CheckResult> {
   try {
     const enabled = cfg.feeds.filter((f) => f.enabled);
     const results = await Promise.all(enabled.map((f) => checkFeed(f, prevByUrl.get(f.url))));
-    // Every fresh feed shows. Config order is priority, which only matters once
-    // more feeds are fresh than maxEmoji leaves room for.
-    const winners = enabled.filter((_, i) => results[i]?.hit).slice(0, cfg.maxEmoji);
-    const state: State = {
-      checkedAt: Date.now(),
-      emoji: winners.length ? winners.map((f) => f.emoji).join("") : cfg.fallback,
-      winners: winners.map((f) => f.name),
-      feeds: results,
-    };
+    const state = buildState(cfg, results);
     await saveState(state);
     return { ...state, skipped: false };
   } finally {

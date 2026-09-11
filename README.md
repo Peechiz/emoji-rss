@@ -34,7 +34,7 @@ snippet for any prompt it will not edit (a bash statusline, tmux, whatever).
 emoji-rss                 # menu: add / edit / reorder / remove / check
 emoji-rss add <url>       # fetch the feed, name it, pick an emoji
 emoji-rss ls              # feeds, priority order, what the last check found
-emoji-rss check --force   # fetch now
+emoji-rss check --force   # fetch now, rather than waiting out the ttl
 emoji-rss now             # print the emoji the prompt is showing (no network)
 ```
 
@@ -42,11 +42,17 @@ Adding a feed fetches it first, so the prompts are answerable: it shows you the
 item count, the newest item's date, which path prefixes the links use, and
 whether your new emoji would be showing right now.
 
+You rarely need `check`. The prompt refreshes itself in the background every 30
+minutes, and any change you make in the CLI — a new feed, a different emoji, a
+reorder, a removal — rewrites the cache immediately without a network request,
+because whether each feed is fresh is already known. `check` is for "it just
+updated and I don't want to wait", and for seeing which feeds are erroring.
+
 ## How it doesn't slow down your prompt
 
 The prompt never touches the network and never forks.
 
-- `emoji-rss check` fetches every feed, picks a winner, and writes it to
+- `emoji-rss check` fetches every feed, picks the winners, and writes them to
   `~/.cache/emoji-rss/emoji` — that file holds one emoji and nothing else.
 - The zsh hook reads that file with `$(<file)`, a zsh builtin, and gets the
   mtime with `zstat` from `zsh/stat`. No subprocesses in `precmd`.
